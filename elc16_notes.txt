@@ -1,0 +1,159 @@
+- I'm going to be talking about 'lessons from Ion'. 
+The lessons I'm going to be discussing are mostly related to upstreaming and maintaining a framework. 
+Some of the design aspects are going to be mentioned for discussion of why they do or don't work.
+As implied by the directory name, Ion is part of the kernel patches used by the Android operating system. 
+A lot of the lessons learned aren't specific to Ion but can be applied to almost any out of tree code. 
+I think this is particularly important to discuss with the growth of the Internet of Things. 
+Any of those devices which try to use the Linux kernel are probably going to run into the same kinds of problems Android has run into if they ever want to run on a mainline kernel or be able to do upgrades with any kind of speed. 
+None of this is particularly new but we still keep getting it wrong.
+"When is the kernel going to be finished" is the old joke but the flip side of that means that the kernel doesn't have all features that ever existed. 
+It's easy to write code to add a new feature but getting code accepted in the mainline is not easy.
+Android is software written for shipping a product.
+Write code for a product and writing code intended for upstream are not the same thing.
+It takes effort to take the code you wrote for your special product and turn it into something that the community will accept.
+
+- With that said, let's talk about what exactly Ion is all about.
+I started working on Android phones full time in 2010 and the hardware and software landscape for Android looked very different.
+Back in 2010 very few of hardware blocks had MMUs so everything needed contiguous memory.
+There have been a number of improvements with features like CMA but at that time the best solution was to pull the memory out of the system and set it aside for a particular hardware block.
+There was no unified code to do this so every hardware vendor had their own framework to deal with this.
+Google understandably got tired of dealing with this for their phones so Ion was created by Rebecca Shultz Zavin.
+It was designed to replace all the features of the other frameworks with something that had all the features Android needed.
+This last point is very important: it was written with Android ideas and use cases in mind for shipping a device.
+This is a good lesson: don't duplicate frameworks, Consolidate where you can.
+This is, again, not a new idea. Many other subsystems have gone through this, GPIO, clocks etc.
+Nobody wants to differentiate on having the best framework.
+Find something that meets everyones requirements and you will come out ahead.
+
+- Ion introduced some abstractions to deal with this.
+As mentioned before, one of the main things Ion was trying to deal with was carved out memory but it needed to
+be flexible enough to deal with whatever else vendors came up with.
+This is what the heap abstraction represents, a single type of memory.
+Each heap is kind of like a class. You can have multiple instances of the same class.
+For example if you have a system with a camera and a video processor which need their own memory and a GPU
+with an MMU, you could have two different carveout heaps for the camera and video and a separate heap for the GPU.
+
+- So how do you decide which heap to allocate from?
+Ion's solution is one which is both really clever and a pain to work with.
+Each particular heap instance is represented by a bit in 32bit field. Note this is heap instance, not type.
+Allocation is tried in order based on what bits are set.
+If a heap isn't present, it will just fall back to the next heap specified.
+This makes it easier for clients just to specify everything they want and then let the framework take care of the hard work.
+This was a partial design goal of Ion.
+The hope was that the platform configuration would specify the ordering of heaps so that allocation clients wouldn't have to.
+Sounds great right?
+In abstract this seems nice and simple but the practicalities are kind of a pain.
+The heap ids for the bit mask are not discoverable, they are hard coded as #defines for userspace to use.
+This makes heaps and their heap IDs an ABI.
+You only have 32-bits worth of ABI to play with.
+From experience, not breaking this ABI is difficult.
+Trying to encode new requirements for devices in the heaps often lead to breakage.
+
+Example:
+system X has heaps A and B.
+A is a higher priority than B.
+A is a carveout and B is pages allocated from the buddy allocator.
+Reasons might include, trade off of performance vs usage, this carveout may be for a non-overlapping use case whatever.
+It's some sort of non-negotiable use case or it was negotiable and you lost the negotiation.
+There are also a handful of other heaps in the system as well.
+
+Enter system Y. System Y has a new requirement: You need some carveout memory for a new hardware block, something like optimized displaying of cat pictures.
+It is decided that the memory that was set aside for heap A before can now be used for your new hardware block.
+Now how do we encode this in Ion? You could use the existing heap ID for heap A except this means clients that are already specifying both A and B are going to allocate from your heap. No cat pictures for you. Okay then let's create a new heap ID.
+Great this works.
+Remember though I said there are only 32-bits worth of heaps available for allocation.
+This sounds like a lot but it goes quickly.
+Enter system Z. System Z is great, everything has IOMMUs on every hardware block so allocation can just come from B which is pages from the buddy allocator.
+Everything is dandy! Until one of the hardware blocks in that path can't use the IOMMU.
+Hardward errata that will be fixed in v2, software requirement that will be fixed the 12th of never, whatever. 
+
+In short, trying to encode all your weird hardware allocation quriks and requirements is really limited by a 32-bit ABI.
+The only reason this was doable was because products could be tightly coupled so what was shipped worked. Just change everything at the same time.
+This doesn't work very well for upstream.
+Big take away: think about your ABIs and design them well.
+You can have the most noble goal and best idea ever but it needs to be workable and to scale.
+
+- One of the biggest design choices Ion made was to mostly exist outside of the traditional device model.
+Instead of using something like a struct device, Ion created its own notion of ion clients.
+A client represents some abstract entity who owns a buffer.
+Every time a userspace client calls open("/dev/ion") a new client is created. 
+This gives userspace a lot of freedom to allocate and control buffers which was something that was missing from the kernel.
+The downside is that there are still plenty of places in the kernel where this doesn't integrate well.
+To begin with, upstream also doesn't want drivers to be littered with 'struct ion_client' everywhere just to support the Ion framework.
+This means that any Ion APIs that are in kernel really shouldn't be requiring an Ion client.
+But the client represents Ion's idea of ownership so it's very difficult to say that driver will own a buffer without having the fundamental object of ownership.
+
+Another big problem is cache synchronization.
+I gave a talk about this at plumbers a couple of years ago.
+Cache operations are really difficult to get right and the kernel typically abstracts these away so they are transparent to drivers through the DMA APIs.
+Except ion exists outside the DMA model so its left calling the cache APIs in ways they aren't intended.
+This is something we are still working through and will probably be proposing a way to just call the cache APIs directly similar to various DRM frameworks.
+Life would be much easier if we could just work with the existing framework.
+
+Conclusion: existing models are there for a reason.
+It's probably best to expand on those instead of creating your own.
+This goes back to the consolidation point from above.
+Expand on what is already there.
+The idea of userspace buffer ownership doesn't map to anything directly but I think it's an important one.
+
+- We talked about clients so naturally those clients want to share buffers.
+I consider Ion sharing to be one of the success stories.
+Ion uses the dma but APIs for sharing. That's it, it's remarkably boring.
+Ion did not originally use dma_buf Apis mostly because they didn't exist when it was written.
+dma_buf was created in parallel but used the same fd mechanism Ion was using. 
+Ion later switched over.
+This means that any driver which accepts dma buf can accept Ion allocated buffers.
+This is exactly the way it should work. It's a give and take: if a new API can replace your
+mechanism use it. If your patch has feature everyone can benefit from pull it out.
+
+- I mentioned clients which have ownership and dma_bufs for sharing.
+Ion has it's own representation for allocations that tie into sharing.
+ion_buffer represents an individual allocation to a piece of memory.
+Ion clients don't act on buffers directly, they act on ion_handles.
+A handle is a pointer to a specific ion_buffer. handles are unique
+per client. Both of these are reference counted which means that even though a
+client may call ion_free the buffer itself will not be freed until all clients
+with a reference to the buffer have dropped their reference. 
+Like other thins with Ion this sounds great: lifetime management!
+In pratice getting this right is hard.
+Races between import and handle destroy have been very common.
+Because userspace is triggering the import or destroy it gets even harder to synchronize.
+Memory leaks can also be a pain to figure out.
+We have buffers and handles. As mentioned, clients don't operate on buffers, they
+operate on handles. leaking of handles is very common bug. Figuring out which
+client is doing the leak is hard
+buffers are shared everywhere and it's generally not the client who allocated who
+is doing the leaking. This leads to a lot of tracking overhead to figure out
+leaks.
+You also end up with the degenerate case. It's possible for a buffer to exist
+with no handle and being owned by no client. This is because when a buffer is
+exported via dma_buf, you take a reference to the buffer to prevent it from
+being destroyed while its being shared. Once that reference exists, clients
+can destroy all handles and have the last reference be an fd. This is not a bug!
+I've gone back and forth with people a lot on this but it's a valid case. It's
+very confusing for buffer accounting and hard to debug where the reference is
+still being held.
+
+Lesson here: debugging strategy needs to be part of your design. When
+programmers screw up how are you going to help them solve the problem?
+Don't just hang them out to try.
+
+- So that was a lot of discussion about what Ion does and the gaps it was filling in. 
+Ion is sitting in staging and hasn't seen a lot of progress to move out.
+Important questions to ask: Is Ion still needed and does anyone actually care about it on mainline? I'd argue the two are connected.
+There's been a lot of progress on getting mainline kernel running on a cell phone.
+The demos are really cool and yohu should look them up if you haven't seen them already.
+None of that work has touched Ion though.
+This is not a negative against those working on it.
+More importantly, it shows that if Ion _is_ needed it's not needed for Android.
+Ion may always be needed for running on your latest Android device but that is very different than having Ion run on mainline.
+
+- So is it needed? That depends on what people are trying to do on mainline.
+The constraint solving portion of figuring out if contiguous vs non-contiguous memory should be used is less important these days.
+What patches and questions come in for Ion seem to be related to "I want to do something with memory X in userspace on my device".
+Ion is really good at providing a way for that to happen.
+But they key here is that people who are interested in this need to make it happen and give feedback.
+It's very hard to figure out what to do with Ion without that feedback loop.
+This is an important lesson: mainlining and maintaining code takes effort.
+If code is going to exist in mainline out of staging it needs to have users who want to use it.
+You need to speak up and contribute! Otherwise your needs are not going to be met. 

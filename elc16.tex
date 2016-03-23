@@ -1,0 +1,237 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Beamer Presentation
+% LaTeX Template
+% Version 1.0 (10/11/12)
+%
+% This template has been downloaded from:
+% http://www.LaTeXTemplates.com
+%
+% License:
+% CC BY-NC-SA 3.0 (http://creativecommons.org/licenses/by-nc-sa/3.0/)
+%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%----------------------------------------------------------------------------------------
+%	PACKAGES AND THEMES
+%----------------------------------------------------------------------------------------
+
+\documentclass{beamer}
+
+\mode<presentation> {
+
+\usetheme{Madrid}
+
+%\setbeamertemplate{footline} % To remove the footer line in all slides uncomment this line
+\setbeamertemplate{footline}[page number] % To replace the footer line in all slides with a simple slide count uncomment this line
+
+%\setbeamertemplate{navigation symbols}{} % To remove the navigation symbols from the bottom of all slides uncomment this line
+}
+
+\usepackage{graphicx} % Allows including images
+\usepackage{booktabs} % Allows the use of \toprule, \midrule and \bottomrule in tables
+
+%----------------------------------------------------------------------------------------
+%	TITLE PAGE
+%----------------------------------------------------------------------------------------
+
+\title[Lessons from Ion]{Lessons from Ion}
+
+\author{Laura Abbott}
+\institute[Red Hat]
+{
+\textit{labbott@redhat.com}
+\\
+\textit{labbott@fedoraproject.org}
+\\
+\textit{laura@labbott.name}
+}
+\date{April 6, 2016}
+
+\begin{document}
+
+\begin{frame}
+\titlepage
+\end{frame}
+
+%----------------------------------------------------------------------------------------
+%	PRESENTATION SLIDES
+%----------------------------------------------------------------------------------------
+
+\begin{frame}
+\frametitle{Which Ion?}
+\begin{itemize}
+\item Not the tiling window manager
+\item Not the cell phone
+\item Not the latest framework Google released
+\item Yes, the framework in drivers/staging/android/ion
+\end{itemize}
+\end{frame}
+
+\begin{frame}
+\frametitle{Who Am I?}
+\begin{itemize}
+\item Not the original Ion author
+\item Used to crash cell phones
+\item Currently crash Fedora
+\item "Maintainer" of Ion
+\end{itemize}
+\end{frame}
+
+\begin{frame}
+\frametitle{Why?}
+\Huge{\centerline{Why am I talking about this?}}
+\end{frame}
+
+\begin{frame}
+\frametitle{Ion introduction}
+\begin{itemize}
+\item Need a way to manage memory pools
+\item Everyone has a pet framework
+\item Ion is consolidated framework
+\item Sharing, allocation, mapping
+\item Lesson: consolidation is good
+\end{itemize}
+\end{frame}
+
+\begin{frame}
+\frametitle{Ion concepts: Heap}
+\begin{itemize}
+\item Single type of memory
+\item Specific carveout region, buddy pages, CMA region etc.
+\item bitmask of IDs for allocation
+\item allows for fallback depending on system configuration
+\end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]
+\frametitle{Ion concepts: Heap}
+\begin{verbatim}
+struct ion_allocation_data {
+        size_t len;
+        size_t align;
+        unsigned int heap_id_mask;
+        unsigned int flags;
+        ion_user_handle_t handle;
+};
+
+#define ION_IOC_ALLOC           _IOWR(ION_IOC_MAGIC, 0, \
+                               struct ion_allocation_data)
+\end{verbatim}
+\end{frame}
+
+
+\begin{frame}
+\frametitle{Heap example: System X}
+\begin{itemize}
+\item Some mixture of heaps
+\item Some IOMMUs, some not
+\item Heaps A and B
+\item \begin{itemize}
+\item Heap A - carveout highest priority
+\item Heap B - buddy pages
+\end{itemize}
+\end{itemize}
+\end{frame}
+
+\begin{frame}
+\frametitle{Heap example: System Y}
+\begin{itemize}
+\item Fun new hardware block
+\item Requirement: use the memory that was carved out for Heap A
+\item Existing heap ID or new heap ID?
+\end{itemize}
+\end{frame}
+
+\begin{frame}
+\frametitle{Heap example: System Z}
+\begin{itemize}
+\item Beautiful looking system
+\item Beautiful looking hardware errata to work around
+\item One errata time n systems = wait where did the bits go?
+\end{itemize}
+\end{frame}
+
+\begin{frame}
+\frametitle{Heap conclusion}
+Lesson: Think about your ABIs. \\
+Please make them discoverable
+\end{frame}
+
+
+\begin{frame}
+\frametitle{Ion concept: Client}
+\begin{itemize}
+\item Notion of 'ownership'
+\item open("/dev/ion") and kernel APIs
+\item Lesson: existing models are there for a reason
+\end{itemize}
+\end{frame}
+
+\begin{frame}
+\frametitle{Sharing}
+\begin{itemize}
+\item fds for sharing
+\item dma\_buf is the generic version
+\item Lesson: Take what works!
+\end{itemize}
+\end{frame}
+
+\begin{frame}
+\frametitle{Ion concept: buffer/handle}
+\begin{itemize}
+\item buffer represents a specific allocation
+\item handle reference per client
+\item Reference counting of everything! \\
+\includegraphics[scale=0.5]{ion_handle.png}
+\end{itemize}
+\end{frame}
+
+\begin{frame}
+\frametitle{Writing correct code is hard}
+\begin{itemize}
+\item Reference counting is hard to get right for everyone!
+\item Still finding race conditions
+\item Users need to be able to debug their code (I don't want to debug your code)
+\end{itemize}
+\end{frame}
+
+\begin{frame}
+\frametitle{What did we learn here?}
+Lesson: Concurrency is hard \\
+Lesson: Think about debugging in the beginning
+\end{frame}
+
+\begin{frame}
+\frametitle{So}
+Do we still need Ion? Does anyone care?
+\end{frame}
+
+\begin{frame}
+\frametitle{Yes and...}
+\begin{itemize}
+\item Android?
+\item Userspace allocation seems popular
+\item Generic allocation framework?
+\item Devicetree?
+\item Lesson: mainlining takes work. Why are you doing it?
+\end{itemize}
+\end{frame}
+
+\begin{frame}
+\frametitle{Summary}
+\begin{itemize}
+\item The kernel has missing pieces, code but think about your goals
+\item ABIs are hard
+\item Concurrency is hard
+\item Debugging is hard
+\item Think twice before creating your own model, expand instead
+\item Do you care about getting it in mainline?
+\end{itemize}
+\end{frame}
+
+\begin{frame}
+\frametitle{Questions?}
+\Huge{\centerline{Questions?}}
+\end{frame}
+
+\end{document}
